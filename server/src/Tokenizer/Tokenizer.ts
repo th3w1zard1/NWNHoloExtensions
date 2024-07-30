@@ -60,8 +60,13 @@ export default class Tokenizer {
   }
 
   private getRawTokenContent(line: string, token: IToken) {
+    if (!token) {
+      console.error('Token is undefined:', line);
+      return '';
+    }
     return line.slice(token.startIndex, token.endIndex);
   }
+  
 
   private getTokenIndex(tokensArray: IToken[], targetToken: IToken) {
     return tokensArray.findIndex((token) => token.startIndex === targetToken.startIndex);
