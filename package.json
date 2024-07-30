@@ -16,6 +16,15 @@
   "engines": {
     "vscode": "^1.86.0"
   },
+  "activationEvents": [
+    "onCommand:extension.setupTasksJson",
+    "onCommand:extension.buildActiveFile",
+    "onCommand:extension.buildSpecificFile",
+    "onCommand:extension.buildFolder",
+    "onCommand:extension.buildActiveFileDirect",
+    "onCommand:extension.buildSpecificFileDirect",
+    "onCommand:extension.buildFolderDirect"
+  ],
   "categories": [
     "Programming Languages"
   ],
