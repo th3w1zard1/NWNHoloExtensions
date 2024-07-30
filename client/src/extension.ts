@@ -469,7 +469,18 @@ async function setupTasksJson(context: vscode.ExtensionContext) {
     type: 'shell',
     command: command,
     group: 'build',
-    problemMatcher: [],
+    problemMatcher: [
+      {
+        "owner": "custom",
+        "fileLocation": ["absolute"],
+        "pattern": {
+          "regexp": "^(.*)\\((\\d+)\\): Error: (.*)$",
+          "file": 1,
+          "line": 2,
+          "message": 3
+        }
+      }
+    ],
     presentation: {
       echo: true,
       reveal: 'always',
