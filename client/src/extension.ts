@@ -262,18 +262,109 @@ async function getTaskType(): Promise<string | undefined> {
   });
 }
 
+interface SettingsJson {
+  'nwnnsscomp.path'?: string;
+}
+
+async function setupSettingsJson(context: vscode.ExtensionContext) {
+  const workspaceFolder = vscode.workspace.workspaceFolders ? vscode.workspace.workspaceFolders[0].uri.fsPath : undefined;
+  if (!workspaceFolder) {
+    throw new Error('Define a workspace folder first.');
+  }
+
+  const vscodeFolderPath = join(workspaceFolder, '.vscode');
+  const settingsJsonPath = join(vscodeFolderPath, 'settings.json');
+
+  let settingsJson: SettingsJson = {};
+
+  try {
+    const settingsJsonContent = await fs.readFile(settingsJsonPath, 'utf8');
+    settingsJson = JSON.parse(settingsJsonContent) as SettingsJson;
+  } catch (err) {
+    // settings.json does not exist, create a new one
+  }
+
+  let nwnnsscompPath = settingsJson['nwnnsscomp.path'];
+  if (!nwnnsscompPath) {
+    nwnnsscompPath = await getNwnnsscompPath();
+    if (!nwnnsscompPath) {
+      vscode.window.showErrorMessage('nwnnsscomp path is required.');
+      return;
+    }
+    settingsJson['nwnnsscomp.path'] = nwnnsscompPath;
+    await fs.writeFile(settingsJsonPath, JSON.stringify(settingsJson, null, 2), 'utf8');
+  }
+
+  vscode.window.showInformationMessage('settings.json has been set up successfully.');
+}
+
+
 async function setupTasksJson(context: vscode.ExtensionContext) {
-  const taskType = await getTaskType();
-  if (!taskType) {
-    vscode.window.showErrorMessage('Task type selection is required.');
+  await setupSettingsJson(context);
+
+  let workspaceFolder = vscode.workspace.workspaceFolders ? vscode.workspace.workspaceFolders[0].uri.fsPath : undefined;
+
+  if (!workspaceFolder) {
+    const result = await vscode.window.showOpenDialog({
+      canSelectFolders: true,
+      canSelectFiles: false,
+      openLabel: 'Select Workspace Folder'
+    });
+  
+    if (result && result.length > 0) {
+      workspaceFolder = result[0].fsPath;
+      vscode.workspace.updateWorkspaceFolders(0, null, { uri: result[0] });
+    } else {
+      throw new Error('Define a workspace folder first.');
+    }
+  }
+  
+
+  const vscodeFolderPath = join(workspaceFolder, '.vscode');
+  const settingsJsonPath = join(vscodeFolderPath, 'settings.json');
+  let settingsJson;
+
+  try {
+    const settingsJsonContent = await fs.readFile(settingsJsonPath, 'utf8');
+    settingsJson = JSON.parse(settingsJsonContent);
+  } catch (err) {
+    vscode.window.showErrorMessage('Error reading settings.json.');
     return;
   }
 
-  const nwnnsscompPath = await getNwnnsscompPath();
+  let nwnnsscompPath = settingsJson['nwnnsscomp.path'];
   if (!nwnnsscompPath) {
-    vscode.window.showErrorMessage('nwnnsscomp path is required.');
-    return;
+    nwnnsscompPath = await getNwnnsscompPath();
+    if (!nwnnsscompPath) {
+      vscode.window.showErrorMessage('nwnnsscomp path is required.');
+      return;
+    }
+    settingsJson['nwnnsscomp.path'] = nwnnsscompPath;
+    await fs.writeFile(settingsJsonPath, JSON.stringify(settingsJson, null, 2), 'utf8');
   }
+  
+  try {
+    await fs.access(nwnnsscompPath, nodeFs.constants.F_OK);
+  } catch (err) {
+    vscode.window.showWarningMessage(`nwnnsscomp path "${nwnnsscompPath}" does not exist. Please select the correct path.`);
+    nwnnsscompPath = await getNwnnsscompPath();
+    if (!nwnnsscompPath) {
+      vscode.window.showErrorMessage('nwnnsscomp path is required.');
+      return;
+    }
+    settingsJson['nwnnsscomp.path'] = nwnnsscompPath;
+    await fs.writeFile(settingsJsonPath, JSON.stringify(settingsJson, null, 2), 'utf8');
+  }
+  
+  let taskType: string | undefined;
+
+  do {
+    taskType = await getTaskType();
+    if (!taskType) {
+      vscode.window.showErrorMessage('Task type selection is required.');
+    }
+  } while (!taskType);
+  
 
   const compiler = new ExternalNCSCompiler(nwnnsscompPath);
   await compiler.init();
@@ -286,9 +377,8 @@ async function setupTasksJson(context: vscode.ExtensionContext) {
 
   switch (taskType) {
     case 'Build Active File':
-      // Placeholder source file since actual file will be active document
-      sourceFile = '{file}';
-      outputFile = sourceFile.replace(/\.nss$/, ".ncs");
+      sourceFile = '${fileDirname}\\${fileBasenameNoExtension}.nss';
+      outputFile = '${fileDirname}\\${fileBasenameNoExtension}.ncs';
       additionalArgs = await getAdditionalArgs(compilerInfo, outputFile);
       break;
     case 'Build Specific File':
@@ -297,7 +387,9 @@ async function setupTasksJson(context: vscode.ExtensionContext) {
         vscode.window.showErrorMessage('Source file path is required.');
         return;
       }
-      outputFile = sourceFile.replace(/\.nss$/, ".ncs");
+      const relativeSourceFilePath = path.relative(workspaceFolder, sourceFile);
+      const sourceFileDir = path.dirname(relativeSourceFilePath);
+      outputFile = path.join(workspaceFolder, sourceFileDir, path.basename(sourceFile, '.nss') + '.ncs');
       additionalArgs = await getAdditionalArgs(compilerInfo, outputFile);
       break;
     case 'Build Folder':
@@ -309,25 +401,73 @@ async function setupTasksJson(context: vscode.ExtensionContext) {
       folderPath = folderUri[0].fsPath;
       outputFile = path.join(folderPath, 'compiled');
       additionalArgs = await getAdditionalArgs(compilerInfo, outputFile);
-      break;
+      
+      // Ensure the output folder exists
+      await fs.mkdir(outputFile, { recursive: true });
+    
+      // PowerShell command to compile all .nss files in the folder
+      const command = [
+        'powershell.exe',
+        '-Command',
+        `Get-ChildItem -Recurse -Filter *.nss -Path "${folderPath}" | ForEach-Object { & "${nwnnsscompPath}" -c $_.FullName -o "$($_.FullName -replace '.nss', '.ncs')" }`
+      ];      
+    
+      const task = {
+        label: `${compilerInfo.name} ${taskType}`,
+        type: 'shell',
+        command: command,
+        group: 'build',
+        problemMatcher: [
+          {
+            "owner": "custom",
+            "fileLocation": ["absolute"],
+            "pattern": {
+              "regexp": "^(.*)\\((\\d+)\\): Error: (.*)$",
+              "file": 1,
+              "line": 2,
+              "message": 3
+            }
+          }
+        ],
+        presentation: {
+          echo: true,
+          reveal: 'always',
+          focus: false,
+          panel: 'shared'
+        }
+      };
+
+      const tasksJson = {
+        version: '2.0.0',
+        tasks: [task]
+      };
+    
+      const tasksJsonPath = join(vscodeFolderPath, 'tasks.json');
+      await fs.writeFile(tasksJsonPath, JSON.stringify(tasksJson, null, 2));
+      vscode.window.showInformationMessage('Tasks.json has been set up successfully.');
+      return;
   }
 
   if (!sourceFile && !folderPath) {
     vscode.window.showErrorMessage('Source file or folder path is required.');
     return;
   }
+
   const config: NwnnsscompConfig = new NwnnsscompConfig(
     compilerInfo.sha256,
     sourceFile || '',
     outputFile || '',
     Number(additionalArgs['game_value'] || 1)
   );
+
+  const command = taskType === 'Build Folder'
+    ? `for %f in (${folderPath}\\*.nss) do ${nwnnsscompPath} ${config.get_compile_args(nwnnsscompPath).slice(1).join(' ')}`
+    : [nwnnsscompPath, '-c', sourceFile, '-o', outputFile];
+
   const task = {
     label: `${compilerInfo.name} ${taskType}`,
     type: 'shell',
-    command: taskType === 'Build Folder'
-      ? `for %f in (${folderPath}\\*.nss) do ${nwnnsscompPath} ${config.get_compile_args(nwnnsscompPath).slice(1).join(' ')}`
-      : config.get_compile_args(nwnnsscompPath),
+    command: command,
     group: 'build',
     problemMatcher: [],
     presentation: {
@@ -343,25 +483,7 @@ async function setupTasksJson(context: vscode.ExtensionContext) {
     tasks: [task]
   };
 
-  const workspaceFolder = vscode.workspace.workspaceFolders ? vscode.workspace.workspaceFolders[0].uri.fsPath : undefined;
-  if (!workspaceFolder) {
-    vscode.window.showErrorMessage('No workspace folder found.');
-    return;
-  }
-  
-  const vscodeFolderPath = join(workspaceFolder, '.vscode');
   const tasksJsonPath = join(vscodeFolderPath, 'tasks.json');
-  
-  try {
-    await fs.mkdir(vscodeFolderPath, { recursive: true });
-    if (!nodeFs.existsSync(tasksJsonPath)) {
-      await fs.writeFile(tasksJsonPath, JSON.stringify({ version: '2.0.0', tasks: [] }, null, 2));
-    }
-  } catch (error) {
-    vscode.window.showErrorMessage('Error creating .vscode folder or tasks.json file.');
-    return;
-  }
-
   await fs.writeFile(tasksJsonPath, JSON.stringify(tasksJson, null, 2));
   vscode.window.showInformationMessage('Tasks.json has been set up successfully.');
 }
