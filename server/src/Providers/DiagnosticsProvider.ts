@@ -61,7 +61,7 @@ export default class DiagnoticsProvider extends Provider {
         return "";
     }
   }
-
+  
   public publish(uri: string) {
     return new Promise<boolean>((resolve, reject) => {
       const { enabled, nwnHome, reportWarnings, nwnInstallation, verbose, os } = this.server.config.compiler;
@@ -98,32 +98,11 @@ export default class DiagnoticsProvider extends Provider {
       if (verbose) {
         this.server.logger.info(`Compiling ${document.uri}:`);
       }
+
       // The compiler command:
-      //  - y; continue on error
-      //  - c; compile includes
-      //  - l; try to load resources if paths are not supplied
-      //  - r; don't generate the compiled file
-      //  - h; game home path
-      //  - n; game installation path
-      //  - i; includes directories
-      const args = ["-y", "-c", "-l", "-r", "SKIP_OUTPUT"];
-      if (Boolean(nwnHome)) {
-        args.push("-h");
-        args.push(`"${nwnHome}"`);
-      } else if (verbose) {
-        this.server.logger.info("Trying to resolve Neverwinter Nights home directory automatically.");
-      }
-      if (Boolean(nwnInstallation)) {
-        args.push("-n");
-        args.push(`"${nwnInstallation}"`);
-      } else if (verbose) {
-        this.server.logger.info("Trying to resolve Neverwinter Nights installation directory automatically.");
-      }
-      if (children.length > 0) {
-        args.push("-i");
-        args.push(`"${[...new Set(uris.map((uri) => dirname(fileURLToPath(uri))))].join(";")}"`);
-      }
-      args.push(`"${fileURLToPath(uri)}"`);
+      //  -c; compile source file
+      //  -o; output file
+      const args = ["-c", fileURLToPath(uri), "-o", fileURLToPath(uri).replace(".nss", ".ncs")];
 
       let stdout = "";
       let stderr = "";
